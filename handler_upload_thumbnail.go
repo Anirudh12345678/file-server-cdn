@@ -2,7 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -28,10 +32,33 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
+	const maxMem int64 = 10 << 20
+	r.ParseMultipartForm(maxMem)
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	file, header, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Unable to retrieve thumbnail", err)
+	}
+	contType := header.Header.Get("Content-Type")
+	fileExt := strings.Split(contType, "/")[1]
+	path := filepath.Join(cfg.assetsRoot, videoIDString+"."+fileExt)
+	createdFile, err := os.Create(path)
+	if err != nil {
+		return
+	}
+	io.Copy(createdFile, file)
+	video, err := cfg.db.GetVideo(videoID)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error", err)
+	}
+	if video.UserID != userID {
+		respondWithError(w, http.StatusUnauthorized, "Not authorized", err)
+	}
+
+	thumbnailUrl := "http://localhost:8091/assets/" + videoIDString + "." + fileExt
+	video.ThumbnailURL = &thumbnailUrl
+	cfg.db.UpdateVideo(video)
+	respondWithJSON(w, http.StatusOK, video)
 }
