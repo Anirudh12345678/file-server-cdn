@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -43,7 +45,10 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	contType := header.Header.Get("Content-Type")
 	fileExt := strings.Split(contType, "/")[1]
-	path := filepath.Join(cfg.assetsRoot, videoIDString+"."+fileExt)
+	slice := make([]byte, 32)
+	rand.Read(slice)
+	idString := base64.RawURLEncoding.EncodeToString(slice)
+	path := filepath.Join(cfg.assetsRoot, idString+"."+fileExt)
 	createdFile, err := os.Create(path)
 	if err != nil {
 		return
@@ -57,7 +62,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		respondWithError(w, http.StatusUnauthorized, "Not authorized", err)
 	}
 
-	thumbnailUrl := "http://localhost:8091/assets/" + videoIDString + "." + fileExt
+	thumbnailUrl := "http://localhost:8091/assets/" + idString + "." + fileExt
 	video.ThumbnailURL = &thumbnailUrl
 	cfg.db.UpdateVideo(video)
 	respondWithJSON(w, http.StatusOK, video)
