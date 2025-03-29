@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
@@ -13,37 +12,42 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
+	"github.com/jorgebay/jsonnav"
 )
 
-type videoDims struct {
-	height string
-	width  string
+func processVideoForStart(filepath string) (string, error) {
+	newPath := filepath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filepath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", newPath)
+	cmd.Run()
+	return newPath, nil
 }
-
 func getVideoAspectRatio(filePath string) (string, error) {
-	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "-json", "show_streams", filePath)
+	cmd := exec.Command("ffprobe", "-v", "error", "-select_streams", "v:0", "-print_format", "json", "-show_streams", filePath)
+	fmt.Println(cmd.String())
 	var buffer bytes.Buffer
 	cmd.Stdout = &buffer
-	byteArray, _ := cmd.Output()
-	fmt.Println(byteArray)
-	var dims videoDims
-	json.Unmarshal(byteArray, &dims)
-	width, _ := strconv.Atoi(dims.width)
-	height, _ := strconv.Atoi(dims.height)
-	var res string
-	fmt.Println(dims.width + ":" + dims.height)
-	if width == 16 && height == 9 {
-		res = "landscape"
-	} else if height == 16 && width == 9 {
-		res = "portrait"
-	} else {
-		res = "other"
+	cmd.Run()
+	jsonData, err := jsonnav.Unmarshal(buffer.String())
+	if err != nil {
+		fmt.Println("Cannot decipher into json struct")
+		return "Error in converting to json", nil
 	}
-	return res, nil
+	aspectRatio := jsonData.Get("streams").Array().At(0).Get("display_aspect_ratio")
+	arr := strings.Split(aspectRatio.String(), ":")
+	width, _ := strconv.Atoi(arr[0])
+	height, _ := strconv.Atoi(arr[1])
+	if width == 9 && height == 16 {
+		return "portrait", nil
+	} else if width == 16 && height == 9 {
+		return "landscape", nil
+	} else {
+		return "other", nil
+	}
 }
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
 	uploadLimit := 1 << 30
@@ -85,23 +89,25 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	fileType, _, err := mime.ParseMediaType(headers.Header.Get("Content-Type"))
 
 	tempFile, err := os.CreateTemp("", "tubely-upload.mp4")
-	defer os.Remove(tempFile.Name())
-	defer tempFile.Close()
 
 	io.Copy(tempFile, file)
-	ratio, _ := getVideoAspectRatio("tubely-upload.mp4")
+	ratio, _ := getVideoAspectRatio(tempFile.Name())
 	tempFile.Seek(0, io.SeekStart)
+	processedFile, _ := processVideoForStart(tempFile.Name())
+	newFile, _ := os.Open(processedFile)
+	tempFile.Close()
+	os.Remove(tempFile.Name())
 	objectInput := s3.PutObjectInput{}
 	bucket := "tubely-2005"
 	objectInput.Bucket = &bucket
-	objectInput.Body = tempFile
+	objectInput.Body = newFile
 	slice := make([]byte, 32)
 	rand.Read(slice)
-	key := ratio + base64.RawURLEncoding.EncodeToString(slice) + "." + "mp4"
+	key := ratio + "/" + base64.RawURLEncoding.EncodeToString(slice) + "." + "mp4"
 	objectInput.Key = &key
 	objectInput.ContentType = &fileType
 	cfg.s3Client.PutObject(context.TODO(), &objectInput)
-	vidUrl := "https://tubely-2005.s3.ap-south-1.amazonaws.com/" + ratio + key
+	vidUrl := "https://tubely-2005.s3.ap-south-1.amazonaws.com/" + key
 	video.VideoURL = &vidUrl
 	cfg.db.UpdateVideo(video)
 }
