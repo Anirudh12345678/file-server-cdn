@@ -13,12 +13,9 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 	"github.com/jorgebay/jsonnav"
 )
@@ -101,7 +98,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	tempFile.Close()
 	os.Remove(tempFile.Name())
 	objectInput := s3.PutObjectInput{}
-	bucket := "tubely-2005"
+	bucket := "tubely-private-2005"
 	objectInput.Bucket = &bucket
 	objectInput.Body = newFile
 	slice := make([]byte, 32)
@@ -110,38 +107,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	objectInput.Key = &key
 	objectInput.ContentType = &fileType
 	cfg.s3Client.PutObject(context.TODO(), &objectInput)
-	// vidUrl := "https://tubely-2005.s3.ap-south-1.amazonaws.com/" + key
-	vidUrl := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
+	vidUrl := "https://d3bakecza2o16n.cloudfront.net/" + key
 	video.VideoURL = &vidUrl
 	cfg.db.UpdateVideo(video)
-}
-
-func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	if video.VideoURL == nil {
-		return video, nil
-	}
-	parts := strings.Split(*video.VideoURL, ",")
-	if len(parts) < 2 {
-		return video, nil
-	}
-	bucket := parts[0]
-	key := parts[1]
-	presigned, err := generatePresignedURL(cfg.s3Client, bucket, key, 5*time.Minute)
-	if err != nil {
-		return video, err
-	}
-	video.VideoURL = &presigned
-	return video, nil
-}
-
-func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
-	presignClient := s3.NewPresignClient(s3Client)
-	presignedUrl, err := presignClient.PresignGetObject(context.TODO(), &s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(expireTime))
-	if err != nil {
-		return "", fmt.Errorf("failed to generate presigned URL: %v", err)
-	}
-	return presignedUrl.URL, nil
 }
